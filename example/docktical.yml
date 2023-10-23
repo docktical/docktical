@@ -1,0 +1,7 @@
+tutorial: doc/main.pdf
+terminals:
+  - container: attacker
+    title: "Attacker"
+  - container: webserver 
+    title: "Server Logs"
+    script: /opt/logs.sh
