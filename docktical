@@ -1,12 +1,17 @@
 #!/usr/bin/python3
 
 import os
+import platform
+import subprocess
 import sys
-import argparse
 import yaml
+import shutil
+
+from argparse_yaml import argparser_from_config
 
 DOCKTICAL = {}
 DOCKER_COMPOSE = {}
+ASSUME_YES = False
 
 
 def load_docker_compose():
@@ -22,6 +27,8 @@ def load_docktical():
 
 
 def ask_yes_no(question, default=None):
+    if ASSUME_YES:
+        return True
     answer = "_"
     valid_answers = ["y", "n", "Y", "N"]
     default_is_true = False
@@ -50,7 +57,7 @@ def run_scripts(key):
             print("Docktical want to execute the following script on HOST: ")
             print(scripts)
             if ask_yes_no("Do you want to execute it?", True):
-                shell(scripts)
+                shell(scripts, should_print=False)
             else:
                 exit(0)
         elif isinstance(scripts, list):
@@ -59,7 +66,7 @@ def run_scripts(key):
                 print(script)
             if ask_yes_no("Do you want to execute them?", True):
                 for script in scripts:
-                    shell(script)
+                    shell(script, should_print=False)
             else:
                 exit(0)
 
@@ -68,7 +75,7 @@ def docker_compose(arguments):
     shell("docker compose " + arguments, should_print=True)
 
 
-def shell(cmd, should_print=False):
+def shell(cmd, should_print):
     if should_print:
         print(cmd)
     res = os.system(cmd)
@@ -77,39 +84,58 @@ def shell(cmd, should_print=False):
         exit(res)
 
 
-def open_terminal(container, title, script):
-    if script is None:
-        shell(
-            f"bash -c 'alacritty --title \"{title}\" -e docker exec -it {container} bash &' 1> /dev/null 2>&1")
+def open_file_with_default_app(path):
+    if platform.system() == "Darwin":
+        shell("open \"" + path + "\"", should_print=False)
+    elif platform.system() == "Windows":
+        os.startfile(path)
     else:
-        shell(
-            f"bash -c 'alacritty --title \"{title}\" -e docker exec -it {container} bash {script} &' 1> /dev/null 2>&1")
+        shell("xdg-open \"" + path + "\"", should_print=False)
 
 
-def cmd_start(should_rebuild, no_cache):
-    def rebuild(no_cache):
+def open_terminal(container, user, title, script):
+    if script is None:
+        subprocess.call(
+            f"alacritty --title \"{title}\" -e docker exec -u {user} -it {container} /bin/bash &",
+            shell=True,
+            stdout=open("/dev/null", "w+"),
+            stderr=open("/dev/null", "w+"),
+        )
+    else:
+        subprocess.call(
+            f"alacritty --title \"{title}\" -e docker exec -u {user} -it {container} /bin/bash {script} &",
+            shell=True,
+            stdout=open("/dev/null", "w+"),
+            stderr=open("/dev/null", "w+"),
+        )
+
+
+def cmd_start(should_rebuild, no_cache, no_tutorial):
+    def rebuild():
         docker_compose("down")
         if no_cache:
             docker_compose("build --no-cache")
         else:
             docker_compose("build")
-        docker_compose("up -d")
+        docker_compose("up -d --remove-orphans")
 
     def open_terminals():
         for terminal in DOCKTICAL["terminals"]:
             container = terminal["container"]
             title = terminal.get("title", container)
             script = terminal.get("script", None)
-            open_terminal(DOCKER_COMPOSE["name"] + "-" + container + "-1", title, script)
+            user = terminal.get("user", "user")
+            open_terminal(DOCKER_COMPOSE["name"] + "-" + container + "-1", user, title, script)
 
     def show_tutorial():
         if "tutorial" in DOCKTICAL:
-            if ask_yes_no("Do you want to open the tutorial?", True):
-                shell("xdg-open \"" + os.path.realpath(DOCKTICAL["tutorial"]) + "\"")
+            if not no_tutorial and ask_yes_no("Do you want to open the tutorial?", True):
+                open_file_with_default_app(DOCKTICAL["tutorial"])
 
     if should_rebuild:
-        if ask_yes_no("Rebuild will remove all the data stored in the containers. Do you want to continue?", False):
-            rebuild(no_cache)
+        if ask_yes_no("Rebuild will remove all the data stored in the containers. Do you want to continue?",
+                      False):
+            rebuild()
         else:
             print("Skipping rebuild.")
 
@@ -120,7 +146,7 @@ def cmd_start(should_rebuild, no_cache):
     open_terminals()
 
 
-def cmd_open(terminal_name, is_regexp):
+def cmd_terminal_open(terminal_name, is_regexp):
     if is_regexp:
         import re
         regexp = re.compile(terminal_name)
@@ -139,12 +165,22 @@ def cmd_open(terminal_name, is_regexp):
         terminals.append(title)
         if match(title):
             script = terminal.get("script", None)
+            user = terminal.get("user", "user")
             open_terminal(DOCKER_COMPOSE["name"] +
-                          "-" + container + "-1", title, script)
+                          "-" + container + "-1", user, title, script)
             any_match = True
     if not any_match:
         print(f"None of the terminals match '{
         terminal_name}'. The list of valid terminals are: {', '.join(terminals)}.")
+
+
+def cmd_terminal_ls():
+    terminals = []
+    for terminal in DOCKTICAL["terminals"]:
+        container = terminal["container"]
+        title = terminal.get("title", container)
+        terminals.append(title)
+    print('\n'.join(terminals))
 
 
 def cmd_stop():
@@ -153,53 +189,31 @@ def cmd_stop():
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        prog='docktical',
-        description='a practical work manager which works on Docker containers',
-    )
-    command = parser.add_subparsers(
-        dest="command",
-        required=True
-    )
 
-    start_parser = command.add_parser("start",
-                                      help="start the docktical project present in the current working directory",
-                                      description="""
-    Start the docktical project present in the current working directory.
-    """)
-    start_parser.add_argument(
-        "-r", "--rebuild", help="rebuild the images", action="store_true")
-    start_parser.add_argument(
-        "--no-cache",
-        help="rebuild docker image without cache",
-        action="store_true",
-        dest="no_cache"
-    )
+    docktical_path = shutil.which("docktical")
+    while os.path.islink(docktical_path):
+        docktical_path = os.readlink(docktical_path)
+    src_directory = os.path.dirname(docktical_path)
 
-    open_parser = command.add_parser("open", help="open a terminal of the docktical project", description="""
-    Open a terminal of the docktical project.
-    """)
-    open_parser.add_argument("terminal", help="the terminal name")
-    open_parser.add_argument(
-        "-r", "--regexp", help="interpret the terminal name as a regular expression", action="store_true")
-
-    stop_parser = command.add_parser("stop",
-                                     help="stop the docktical project which is in the current working directory",
-                                     description="""
-    Stop the docktical project present in the current working directory.
-    """)
+    parser = argparser_from_config(os.path.join(src_directory, "cli.yml"))
 
     args = parser.parse_args()
 
-    if hasattr(args, "no_cache") and not hasattr(args, "rebuild"):
-        raise parser.error("the --no-cache requires flag works only with --rebuild")
+    if (hasattr(args, "no_cache") and args.no_cache) and (not hasattr(args, "rebuild") or not args.rebuild):
+        raise parser.error("the --no-cache flag only works with the --rebuild flag")
 
     load_docker_compose()
     load_docktical()
 
+    if hasattr(args, "yes") and args.yes:
+        ASSUME_YES = True
+
     if args.command == "start":
-        cmd_start(args.rebuild, args.no_cache)
-    elif args.command == "open":
-        cmd_open(args.terminal, args.regexp)
+        cmd_start(args.rebuild, args.no_cache, args.no_tutorial)
+    elif args.command == "terminal":
+        if args.terminal_command == "open":
+            cmd_terminal_open(args.terminal, args.regexp)
+        elif args.terminal_command == "ls":
+            cmd_terminal_ls()
     elif args.command == "stop":
         cmd_stop()

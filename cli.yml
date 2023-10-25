@@ -1,0 +1,53 @@
+prog: docktical
+description: >-
+  a practical work manager which works on Docker containers
+
+commands:
+  start:
+    help: start the docktical project present in the current working directory
+    description: >-
+      Start the docktical project present in the current working directory.
+    flags:
+      rebuild:
+        short: r
+        long: rebuild
+        help: rebuild the docker images
+      'yes':
+        short: 'y'
+        long: 'assumeyes'
+        help: automatically answers 'yes' to all questions.
+      no_cache:
+        long: no-cache
+        help: do not use cache when building the image
+      no_tutorial:
+        long: no-tutorial
+        help: do not ask to open the tutorial
+
+  terminal:
+    help: manage docktical terminal
+    description: >-
+      Manage docktical terminal
+    commands:
+      help: command
+      open:
+        help: open a terminal
+        arguments:
+          - terminal:
+              help: the terminal name
+        flags:
+          regexp:
+            short: r
+            long: regexp
+            help: interpret the terminal name as a regular expression
+      ls:
+        help: display the list of available docktical terminals
+
+  stop:
+    help: stop the docktical project
+    description: >-
+      Stop the docktical project present in the current working directory.
+    flags:
+      'yes':
+        short: 'y'
+        long: 'assumeyes'
+        help: automatically answers 'yes' to all questions.
